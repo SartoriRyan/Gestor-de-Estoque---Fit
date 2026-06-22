@@ -1,0 +1,1 @@
+Add simple static index page to avoid 404 while Next.js deploy finalizes
