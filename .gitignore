@@ -1,0 +1,21 @@
+# Byte-compiled / virtual env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+.build/
+dist/
+
+# Virtualenv
+.venv/
+
+# Jupyter
+.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db
