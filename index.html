@@ -1,27 +1,221 @@
 <!doctype html>
 <html lang="pt-BR">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>FitStock - Em Deploy</title>
-    <style>
-      body { font-family: Inter, Arial, sans-serif; background:#f7fafc; color:#0f172a; display:flex; align-items:center; justify-content:center; height:100vh; margin:0 }
-      .card { background:#fff; border-radius:12px; padding:28px; box-shadow:0 10px 30px rgba(2,6,23,0.08); max-width:720px }
-      h1 { margin:0 0 8px 0 }
-      p { margin:6px 0 12px 0; color:#334155 }
-      a.button { display:inline-block; padding:10px 14px; background:#0ea5a4; color:white; border-radius:8px; text-decoration:none }
-      .small { font-size:13px; color:#64748b }
-    </style>
-  </head>
-  <body>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FitStock - Upload & Análise (Estática)</title>
+  <meta name="description" content="FitStock - Reconciliador Quartinho ↔ Recepção (cliente-side)">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#f8fafc;--card:#fff;--muted:#64748b;--accent:#10B981}
+    body{font-family:Inter,Arial,sans-serif;background:var(--bg);margin:0;padding:28px;color:#0f172a}
+    .wrap{max-width:980px;margin:0 auto}
+    .card{background:var(--card);border-radius:12px;padding:20px;box-shadow:0 8px 24px rgba(2,6,23,0.06);margin-bottom:16px}
+    h1{margin:0 0 8px 0;font-size:20px}
+    p.small{color:var(--muted);margin:6px 0 12px 0}
+    input[type=file]{padding:6px}
+    button{background:var(--accent);color:white;border:none;padding:10px 12px;border-radius:8px;cursor:pointer}
+    .metrics{display:flex;gap:12px;flex-wrap:wrap}
+    .metric{padding:10px;border-radius:8px;background:#f8fafc;border:1px solid #eef2f7;min-width:160px}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left}
+    .gap{background:#fff1f2;border-left:4px solid #ef4444;padding:10px;border-radius:6px;margin-bottom:8px}
+    .hidden{display:none}
+    .footer{font-size:13px;color:var(--muted);text-align:center;margin-top:18px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
     <div class="card">
-      <h1>🏋️‍♂️ FitStock</h1>
-      <p>Obrigado! Estamos atualizando o deploy agora. Se você chegou aqui com 404, isso significa que o deploy automático ainda não publicou a versão Next.js do projeto.</p>
-      <p>O site foi atualizado no repositório para garantir que ele sirva uma página inicial enquanto o app Next.js é reconhecido pelo Vercel.</p>
-      <p>
-        <a class="button" href="https://github.com/SartoriRyan/Gestor-de-Estoque---Fit">Abrir repositório no GitHub</a>
-      </p>
-      <p class="small">Se você quiser que eu force o deploy final (Next.js) no Vercel, clique em "Redeploy" no painel do projeto ou me envie os logs de erro do último deploy e eu corrijo.</p>
+      <h1>🏋️‍♂️ FitStock - Upload & Análise</h1>
+      <p class="small">Arraste ou selecione um arquivo .xlsx contendo as colunas mínimas: <b>Produto</b>, <b>Estoque atual (sistema)</b>, <b>Estoque Quartinho</b>, <b>Recepção</b>. Colunas adicionais são tratadas como datas (baixas).</p>
+
+      <input id="fileInput" type="file" accept=".xlsx,.xls" />
+      <button id="processBtn" style="margin-left:8px">Processar</button>
+      <button id="downloadBtn" class="hidden" style="margin-left:8px;background:#0ea5a4">Baixar XLSX Atualizado</button>
+      <div id="status" style="margin-top:12px;color:#334155"></div>
     </div>
-  </body>
+
+    <div id="results" class="hidden">
+      <div class="card">
+        <h2>Resumo</h2>
+        <div class="metrics" id="metricsRow"></div>
+      </div>
+
+      <div class="card">
+        <h2>Top produtos movimentados</h2>
+        <div id="topTable"></div>
+      </div>
+
+      <div class="card">
+        <h2>Gaps detectados</h2>
+        <div id="gapsList"></div>
+      </div>
+
+      <div class="card">
+        <h2>Base de dados (amostra)</h2>
+        <div id="tableSample" style="overflow:auto;max-height:360px"></div>
+      </div>
+    </div>
+
+    <div class="footer card">
+      <div>Esta versão roda inteiramente no seu navegador (sem servidor). Seus arquivos NÃO são enviados a nenhum servidor.</div>
+    </div>
+  </div>
+
+  <!-- SheetJS (xlsx) from CDN -->
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/shim.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+  <script>
+    const fileInput = document.getElementById('fileInput')
+    const processBtn = document.getElementById('processBtn')
+    const statusEl = document.getElementById('status')
+    const resultsEl = document.getElementById('results')
+    const metricsRow = document.getElementById('metricsRow')
+    const topTable = document.getElementById('topTable')
+    const gapsList = document.getElementById('gapsList')
+    const tableSample = document.getElementById('tableSample')
+    const downloadBtn = document.getElementById('downloadBtn')
+
+    let lastProcessedWorkbook = null
+    let lastProcessedJson = null
+
+    function detectDateCols(headers) {
+      const base = ['Produto','Estoque atual (sistema)','Estoque Quartinho','Recepção']
+      return headers.filter(h => !base.includes(h))
+    }
+
+    function toNumber(v){
+      const n = Number(v)
+      return isNaN(n) ? 0 : n
+    }
+
+    function processData(json) {
+      if (!json || json.length===0) return null
+      const headers = Object.keys(json[0])
+      const dateCols = detectDateCols(headers)
+
+      const processed = json.map(row => {
+        const r = {...row}
+        r['Estoque atual (sistema)'] = toNumber(r['Estoque atual (sistema)'])
+        r['Estoque Quartinho'] = toNumber(r['Estoque Quartinho'])
+        r['Recepção'] = toNumber(r['Recepção'])
+        let totalSaidas = 0
+        for (const dc of dateCols){ r[dc] = toNumber(r[dc]); totalSaidas += r[dc] }
+        r['Total Saídas (Datas)'] = totalSaidas
+        r['Quartinho (Derivado do Sistema)'] = r['Estoque atual (sistema)'] - r['Recepção']
+        r['Quartinho Diferença'] = r['Estoque Quartinho'] - r['Quartinho (Derivado do Sistema)']
+        r['Quartinho Atual (Calculado)'] = r['Quartinho (Derivado do Sistema)'] - r['Total Saídas (Datas)']
+        r['Recepção Atual (Calculada)'] = r['Recepção'] + r['Total Saídas (Datas)']
+        r['Soma Pós Movimentação'] = r['Quartinho Atual (Calculado)'] + r['Recepção Atual (Calculada)']
+        r['Inconsistência com Sistema'] = r['Estoque atual (sistema)'] - r['Soma Pós Movimentação']
+        return r
+      })
+
+      const metrics = {
+        items_count: processed.length,
+        total_quartinho: processed.reduce((s,r)=> s + Math.max(0,toNumber(r['Quartinho Atual (Calculado)'])),0),
+        total_recepcao: processed.reduce((s,r)=> s + Math.max(0,toNumber(r['Recepção Atual (Calculada)'])),0),
+        total_movimentado: processed.reduce((s,r)=> s + toNumber(r['Total Saídas (Datas)']),0)
+      }
+
+      const top = [...processed].sort((a,b)=> toNumber(b['Total Saídas (Datas)']) - toNumber(a['Total Saídas (Datas)'])).slice(0,10)
+      const gaps = processed.filter(r=> toNumber(r['Quartinho Atual (Calculado)']) < 0)
+
+      return {processed, metrics, top, gaps, dateCols}
+    }
+
+    function renderMetrics(metrics){
+      metricsRow.innerHTML = ''
+      const items = [
+        {label:'Itens Cadastrados', value:metrics.items_count},
+        {label:'Saldo Quartinho (Reconcil.)', value:metrics.total_quartinho},
+        {label:'Saldo Recepção (Reconcil.)', value:metrics.total_recepcao},
+        {label:'Total Movimentado', value:metrics.total_movimentado}
+      ]
+      for (const m of items){
+        const d = document.createElement('div'); d.className='metric'; d.innerHTML = `<div style=\"font-size:12px;color:#64748b\">${m.label}</div><div style=\"font-size:18px;font-weight:700\">${m.value}</div>`
+        metricsRow.appendChild(d)
+      }
+    }
+
+    function renderTop(top){
+      let html = '<table><thead><tr><th>Produto</th><th style="text-align:right">Total Saídas</th></tr></thead><tbody>'
+      for (const r of top){ html += `<tr><td>${r.Produto}</td><td style="text-align:right">${r['Total Saídas (Datas)']}</td></tr>` }
+      html += '</tbody></table>'
+      topTable.innerHTML = html
+    }
+
+    function renderGaps(gaps){
+      if (!gaps || gaps.length===0){ gapsList.innerHTML = '<div style="padding:12px;background:#ecfdf5;border-radius:8px">Nenhum gap detectado</div>'; return }
+      gapsList.innerHTML = ''
+      for (const g of gaps){
+        const div = document.createElement('div'); div.className='gap'
+        div.innerHTML = `<b>${g.Produto}</b><div>Quartinho derivado: ${g['Quartinho (Derivado do Sistema)']} | Total baixado: ${g['Total Saídas (Datas)']}</div><div style="color:#b91c1c;font-weight:700">Faltam ${Math.abs(g['Quartinho Atual (Calculado)'])} itens no Quartinho.</div>`
+        gapsList.appendChild(div)
+      }
+    }
+
+    function renderSampleTable(processed, dateCols){
+      const cols = ['Produto','Estoque atual (sistema)','Estoque Quartinho','Recepção',...dateCols,'Total Saídas (Datas)','Quartinho (Derivado do Sistema)','Quartinho Atual (Calculado)','Recepção Atual (Calculada)','Inconsistência com Sistema']
+      let html = '<table><thead><tr>'
+      for (const c of cols){ html += `<th>${c}</th>` }
+      html += '</tr></thead><tbody>'
+      for (const r of processed){ html += '<tr>'
+        for (const c of cols){ html += `<td>${r[c] ?? ''}</td>` }
+        html += '</tr>'
+      }
+      html += '</tbody></table>'
+      tableSample.innerHTML = html
+    }
+
+    function downloadWorkbook(processed){
+      const ws = XLSX.utils.json_to_sheet(processed)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Estoque')
+      const wbout = XLSX.write(wb, {bookType:'xlsx', type:'array'})
+      const blob = new Blob([wbout], {type:'application/octet-stream'})
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `estoque_atualizado_${new Date().toISOString().slice(0,10)}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
+
+    processBtn.addEventListener('click', async ()=>{
+      const f = fileInput.files[0]
+      if (!f){ statusEl.textContent = 'Selecione um arquivo .xlsx primeiro.'; return }
+      statusEl.textContent = 'Lendo arquivo...'
+      try{
+        const ab = await f.arrayBuffer()
+        const wb = XLSX.read(ab, {type:'array'})
+        const sheetName = wb.SheetNames[0]
+        const sheet = wb.Sheets[sheetName]
+        const json = XLSX.utils.sheet_to_json(sheet, {defval: ''})
+        if (json.length===0){ statusEl.textContent = 'A planilha está vazia.'; return }
+        statusEl.textContent = 'Processando dados...'
+        const {processed, metrics, top, gaps, dateCols} = processData(json)
+        lastProcessedWorkbook = wb
+        lastProcessedJson = processed
+        renderMetrics(metrics)
+        renderTop(top)
+        renderGaps(gaps)
+        renderSampleTable(processed, dateCols)
+        resultsEl.classList.remove('hidden')
+        downloadBtn.classList.remove('hidden')
+        statusEl.textContent = 'Pronto — resultados gerados (tudo no seu navegador).'
+      }catch(err){
+        console.error(err)
+        statusEl.textContent = 'Erro ao ler/processar o arquivo: ' + err.message
+      }
+    })
+
+    downloadBtn.addEventListener('click', ()=>{
+      if (lastProcessedJson) downloadWorkbook(lastProcessedJson)
+    })
+
+  </script>
+</body>
 </html>
